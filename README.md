@@ -1,8 +1,14 @@
 # StartTileMosaic
 
+简体中文 · [English](README.en.md)
+
 为 Windows 11 上的 Windows 10 风格开始菜单制作图片磁贴。支持方形、宽幅、图片拼图和定时轮换。受微软商店版 TileGenie 启发，作为独立项目开发。
 
-需要安装 [ExplorerPatcher](https://github.com/valinet/ExplorerPatcher) 并启用其 Windows 10 风格开始菜单。构建后双击 `dist\TileGenie.exe` 打开编辑器，使用 Windows 自带的 .NET Framework。
+## 下载与运行
+
+从 [GitHub Releases](https://github.com/Ciel-Lys/StartTileMosaic/releases/latest) 下载带有 `portable.zip` 后缀的便携包。解压后双击 `TileGenie.exe`。固定磁贴前，请安装 [ExplorerPatcher](https://github.com/valinet/ExplorerPatcher) 并启用其 Windows 10 风格开始菜单。
+
+首次固定需要管理员授权信任本机生成的签名证书。之后可在开发人员模式关闭的情况下固定新磁贴。
 
 ## 编辑与固定
 
@@ -18,13 +24,15 @@
 
 ## 保存与安装
 
-磁贴数据保存在 `%LOCALAPPDATA%\TileMosaic\Projects`，其中的 Package 文件夹供 Windows 读取。使用磁贴期间请保留该文件夹的位置。
+源图和裁剪参数保存在 `%LOCALAPPDATA%\TileMosaic\Projects`。新磁贴作为签名 MSIX 安装，显示资源由 Windows 管理。以前用开发人员模式固定的磁贴仍会读取原作品的 Package 文件夹。
 
-本地磁贴包通过 `Add-AppxPackage -Register` 注册。若系统返回 0x80073CFF，请在 Windows 设置中启用开发人员模式，然后在编辑器中再次点击「固定磁贴」。轮换使用 Windows 动态磁贴通知，实际刷新时间可能受到系统节电和后台设置影响。
+固定新磁贴无需启用开发人员模式。首次固定时，编辑器会显示本机签名证书的指纹，征得同意后由 Windows 请求管理员授权，将公钥证书加入本地计算机的「受信任的人」存储。随后可以用同一个证书签名并安装新的磁贴包。签名私钥保存在当前 Windows 用户的个人证书存储中，设置为不可导出。系统管理员禁止旁加载签名应用时，安装仍会受该策略限制。
+
+轮换使用 Windows 动态磁贴通知，实际刷新时间可能受到系统节电和后台设置影响。
 
 ## 构建
 
-在项目目录运行 `.\build.ps1` 构建编辑器。编辑器支持 `--library <文件夹>` 指定磁贴资源目录，以及 `--image <图片路径>` 导入图片。
+在项目目录运行 `.\build.ps1`，生成 `dist\TileGenie.exe`。程序使用 Windows 自带的 .NET Framework，运行时无需安装 Windows SDK。编辑器支持 `--library <文件夹>` 指定磁贴资源目录，以及 `--image <图片路径>` 导入图片。
 
 ## 许可证
 

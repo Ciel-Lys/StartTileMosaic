@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -55,11 +56,14 @@ namespace TileMosaic
             }
         }
         static string Quote(string s) { return "'" + s.Replace("'", "''") + "'"; }
+        internal static string PowerShellPath
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"); }
+        }
         public static async Task<string> PowerShell(string script)
         {
-            string exe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
             string wrapped = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding; try { " + script + " } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }";
-            var info = new ProcessStartInfo(exe, "-NoLogo -NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(wrapped))) {
+            var info = new ProcessStartInfo(PowerShellPath, "-NoLogo -NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(wrapped))) {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
                 StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
             using (var process = new Process { StartInfo = info })
@@ -71,11 +75,29 @@ namespace TileMosaic
                 return result.Trim();
             }
         }
-        public static Task<string> Install(Project p)
+        public static async Task<string> Install(Project p, X509Certificate2 signer)
         {
             p.Validate();
-            return PowerShell("Add-AppxPackage -Register " + Quote(PackageBuilder.PrepareRegistration(p)) +
-                " -ErrorAction Stop; $p=Get-AppxPackage -Name " + Quote(p.PackageName) + "; if (!$p) { throw " + Quote(UiText.Get("安装后的包不存在。")) + " }; $p.PackageFamilyName");
+            if (!LocalSigning.IsTrusted(signer))
+                throw new InvalidOperationException(UiText.Get("无法信任本机签名证书。请检查管理员权限。"));
+            string manifest = PackageBuilder.PrepareRegistration(p);
+            string signedPackage = Path.Combine(p.DirectoryPath, Guid.NewGuid().ToString("N") + ".msix");
+            try
+            {
+                await Task.Run(delegate {
+                    MsixPackage.Pack(manifest, signedPackage);
+                    MsixPackage.Sign(signedPackage, signer);
+                });
+                return await PowerShell("Add-AppxPackage -Path " + Quote(signedPackage) +
+                    " -ErrorAction Stop; $p=Get-AppxPackage -Name " + Quote(p.PackageName) +
+                    "; if (!$p) { throw " + Quote(UiText.Get("安装后的包不存在。")) + " }; $p.PackageFamilyName");
+            }
+            finally
+            {
+                try { File.Delete(signedPackage); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
         }
         public static Task<string> Family(Project p)
         { p.Validate(); return PowerShell("(Get-AppxPackage -Name " + Quote(p.PackageName) + ").PackageFamilyName"); }

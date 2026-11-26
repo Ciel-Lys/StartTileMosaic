@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -529,9 +530,26 @@ namespace TileMosaic
             settings.CycleMinutes = SelectedCycleMinutes;
             settings.Frames = photos.Select(p => p.Crop).ToList();
             var snapshot=settings.Copy();snapshot.Id=Guid.NewGuid().ToString("N");try{snapshot.Validate();}catch(Exception ex){MessageBox.Show(this,ex.Message,UiText.Get("检查输入"));return;}
-            busy=true;pin.Enabled=false;sidebar.Enabled=false;workspace.Enabled=false;SetStatus("正在裁剪图片并准备磁贴…");
+            busy=true;pin.Enabled=false;sidebar.Enabled=false;workspace.Enabled=false;
+            X509Certificate2 signer = null;
             try
             {
+                SetStatus("正在准备本机签名证书…");
+                signer = await LocalSigning.GetOrCreate();
+                if (!LocalSigning.IsTrusted(signer))
+                {
+                    var choice = MessageBox.Show(this, UiText.Format(
+                        "首次固定需要信任本机生成的磁贴签名证书。Windows 会请求管理员授权，将证书加入本机的“受信任的人”。\n\n指纹：{0}\n\n是否继续？",
+                        signer.Thumbprint), "TileGenie", MessageBoxButtons.OKCancel,
+                        MessageBoxIcon.Information, MessageBoxDefaultButton.Button2);
+                    if (choice != DialogResult.OK || !await LocalSigning.Trust(signer))
+                    {
+                        SetStatus("");
+                        return;
+                    }
+                }
+
+                SetStatus("正在裁剪图片并准备磁贴…");
                 Project project;
                 var copies = new List<Bitmap>();
                 try
@@ -541,7 +559,7 @@ namespace TileMosaic
                 }
                 finally { foreach (var copy in copies) copy.Dispose(); }
                 SetStatus("正在安装图片资源…");
-                string family = await ShellIntegration.Install(project);
+                string family = await ShellIntegration.Install(project, signer);
                 SetStatus("正在固定磁贴…");
                 var result = StartPinning.Run(project, family, true);
                 int count = result.Added + result.Present;
@@ -566,14 +584,17 @@ namespace TileMosaic
                 }
             }
             catch(Exception ex){ReportPinFailure(ex);}
-            finally{busy=false;sidebar.Enabled=true;workspace.Enabled=true;pin.Enabled=photos.Count>0;}
+            finally
+            {
+                if (signer != null) signer.Dispose();
+                busy=false;sidebar.Enabled=true;workspace.Enabled=true;pin.Enabled=photos.Count>0;
+            }
         }
         void ReportPinFailure(Exception ex)
         {
             const string text = "固定未完成。请根据提示处理后再试。";
             SetStatus(text);
-            string message = UiText.Get(text) + "\r\n\r\n" + ex.Message + "\r\n\r\n"
-                + UiText.Get("若包含 0x80073CFF，请检查 Windows 开发人员模式。");
+            string message = UiText.Get(text) + "\r\n\r\n" + ex.Message;
             MessageBox.Show(this, message, "TileGenie", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             LogError(text, ex);
         }
