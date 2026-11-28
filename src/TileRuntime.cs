@@ -14,12 +14,12 @@ namespace TileMosaic
             if (!File.Exists(config))
             {
                 long anchor = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
-                string widths = string.Join(",", Enumerable.Range(0, project.Columns)
-                    .Select(column => project.IsWide(column) ? "true" : "false"));
+                string widths = string.Join(",", Enumerable.Range(0, project.TileCount)
+                    .Select(index => project.ShapeAt(project.TileKeyAt(index)) == TileShape.Medium ? "false" : "true"));
                 File.WriteAllText(config, "var tileConfig={frames:" + project.Frames.Count +
                     ",minutes:" + project.CycleMinutes + ",columns:" + project.Columns +
-                    ",count:" + (project.Columns * project.Rows) + ",names:" + (project.ShowNames ? "true" : "false") +
-                    ",wide:[" + widths + "],anchor:" + anchor + "};", Encoding.UTF8);
+                    ",count:" + project.TileCount + ",names:" + (project.ShowNames ? "true" : "false") +
+                    ",wideTiles:[" + widths + "],anchor:" + anchor + "};", Encoding.UTF8);
             }
 
             File.WriteAllText(Path.Combine(directory, "tiles.js"), TilesJs, Encoding.UTF8);
@@ -68,7 +68,8 @@ function tileXml(frame,index){
  var xml='<tile><visual branding=""'+(tileConfig.names?'name':'none')+'"">';
  xml+='<binding template=""TileSquare150x150Image""><image id=""1"" src=""'+stem+'-150.png""/></binding>';
  xml+='<binding template=""TileSquare310x310Image""><image id=""1"" src=""'+stem+'-310.png""/></binding>';
- if(tileConfig.wide[(index-1)%tileConfig.columns])xml+='<binding template=""TileWide310x150Image""><image id=""1"" src=""'+stem+'-Wide.png""/></binding>';
+ var wide=tileConfig.wideTiles?tileConfig.wideTiles[index-1]:tileConfig.wide[(index-1)%tileConfig.columns];
+ if(wide)xml+='<binding template=""TileWide310x150Image""><image id=""1"" src=""'+stem+'-Wide.png""/></binding>';
  var doc=new Windows.Data.Xml.Dom.XmlDocument();doc.loadXml(xml+'</visual></tile>');return doc;
 }
 function refreshTiles(){

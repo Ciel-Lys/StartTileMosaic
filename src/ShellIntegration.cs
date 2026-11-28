@@ -123,7 +123,7 @@ namespace TileMosaic
             {
                 shell = Activator.CreateInstance(Type.GetTypeFromProgID("Shell.Application"));
                 dynamic sh = shell; folder = sh.NameSpace("shell:AppsFolder"); dynamic f = folder;
-                for (int i = 1; i <= p.Rows * p.Columns; i++)
+                for (int i = 1; i <= p.TileCount; i++)
                 {
                     object item = null, verbs = null;
                     try

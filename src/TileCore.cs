@@ -21,31 +21,136 @@ namespace TileMosaic
         public string Id = "";
         public string Name = "我的图片磁贴";
         public int Columns = 2, Rows = 3, Gap = 6;
-        public bool Wide = true, ShowNames = false;
+        public bool Wide = true, ShowNames = false, LargeTiles = false;
         public int[] ColumnWidths;
         public List<FrameCrop> Frames=new List<FrameCrop>();
         public int CycleMinutes=15;
-        public string Website="";
+        public TileBinding DefaultBinding;
+        public Dictionary<Point, TileBinding> TileBindings = new Dictionary<Point, TileBinding>();
+        public FreeTileLayout FreeLayout;
+
+        internal TileBinding BindingAt(Point? tile)
+        {
+            return (tile.HasValue ? BindingOverride(tile.Value) : null) ?? DefaultBinding;
+        }
+
+        internal TileBinding BindingOverride(Point tile)
+        {
+            if (FreeLayout != null) return FreeLayout[tile.X].Binding;
+            TileBinding binding;
+            return TileBindings.TryGetValue(tile, out binding) ? binding : null;
+        }
+
+        internal void SetBinding(Point? tile, TileBinding binding, bool overwriteAll)
+        {
+            if (!tile.HasValue)
+            {
+                DefaultBinding = binding;
+                if (overwriteAll)
+                {
+                    TileBindings.Clear();
+                    if (FreeLayout != null) FreeLayout.ClearBindings();
+                }
+            }
+            else if (FreeLayout != null) FreeLayout.SetBinding(tile.Value.X, binding);
+            else if (binding == null) TileBindings.Remove(tile.Value);
+            else TileBindings[tile.Value] = binding;
+        }
+
+        internal static string PictureId(int number)
+        {
+            return "Picture" + number.ToString("D3", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        internal static Point? TileAfterRemoval(Point tile, bool row, int index)
+        {
+            int position = row ? tile.Y : tile.X;
+            if (position == index) return null;
+            if (position <= index) return tile;
+            return row ? new Point(tile.X, tile.Y - 1) : new Point(tile.X - 1, tile.Y);
+        }
+
+        internal void ShiftBindingsAfterRemoval(bool row, int index)
+        {
+            var remaining = new Dictionary<Point, TileBinding>();
+            foreach (var link in TileBindings)
+            {
+                var tile = TileAfterRemoval(link.Key, row, index);
+                if (tile.HasValue) remaining.Add(tile.Value, link.Value);
+            }
+            TileBindings = remaining;
+        }
+
+        internal static bool TryWebsite(string value, out Uri url)
+        {
+            return Uri.TryCreate(value, UriKind.Absolute, out url) &&
+                (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps) && url.Host.Length > 0;
+        }
         public bool IsWide(int column) { return ColumnWidths == null ? Wide : ColumnWidths[column] == 310; }
-        public int WidthAt(int column) { return IsWide(column) ? 310 : 150; }
+        public int WidthAt(int column) { return LargeTiles || IsWide(column) ? 310 : 150; }
         public int LeftAt(int column) { int x=0; for(int i=0;i<column;i++)x+=WidthAt(i)+Gap; return x; }
         public float Zoom = 1, PanX = .5f, PanY = .5f;
         public int Revision = 0;
         public string DirectoryPath = "";
         public string PackageName { get { return "TileMosaic.Art." + Id; } }
-        public int TileWidth { get { return Wide ? 310 : 150; } }
-        public int TileHeight { get { return 150; } }
-        public int Width { get { return LeftAt(Columns)-Gap; } }
-        public int Height { get { return Rows * TileHeight + (Rows - 1) * Gap; } }
-        public override string ToString() { return Name + "   ·   " + Columns + " × " + Rows + UiText.Get(Wide ? " 宽磁贴" : " 方形磁贴"); }
-        public Project Copy() { var p=(Project)MemberwiseClone(); if(ColumnWidths!=null)p.ColumnWidths=(int[])ColumnWidths.Clone(); p.Frames=Frames.Select(f=>new FrameCrop{Name=f.Name,Zoom=f.Zoom,PanX=f.PanX,PanY=f.PanY}).ToList(); return p; }
+        public int TileWidth { get { return LargeTiles || Wide ? 310 : 150; } }
+        public int TileHeight { get { return LargeTiles ? 310 : 150; } }
+        public int Width { get { return FreeLayout == null ? LeftAt(Columns)-Gap : Math.Max(1, FreeLayout.CropColumns) * (150 + Gap) - Gap; } }
+        public int Height { get { return FreeLayout == null ? Rows * TileHeight + (Rows - 1) * Gap : Math.Max(1, FreeLayout.RowsUsed) * (150 + Gap) - Gap; } }
+        public int TileCount { get { return FreeLayout == null ? Columns * Rows : FreeLayout.Count; } }
+        public Point TileKeyAt(int index)
+        {
+            return FreeLayout == null ? new Point(index % Columns, index / Columns) : new Point(index, 0);
+        }
+        public TileShape ShapeAt(Point tile)
+        {
+            if (FreeLayout != null) return FreeLayout[tile.X].Shape;
+            return LargeTiles ? TileShape.Large : IsWide(tile.X) ? TileShape.Wide : TileShape.Medium;
+        }
+        public Rectangle BoundsAt(Point tile)
+        {
+            if (FreeLayout == null)
+                return new Rectangle(LeftAt(tile.X), tile.Y * (TileHeight + Gap), WidthAt(tile.X), TileHeight);
+            Rectangle cells = FreeLayout[tile.X].Bounds;
+            int pitch = 150 + Gap;
+            return new Rectangle(cells.X * pitch, cells.Y * pitch, cells.Width * pitch - Gap, cells.Height * pitch - Gap);
+        }
+        public override string ToString() { return Name + "   ·   " + Columns + " × " + Rows + UiText.Get(LargeTiles ? " 大磁贴" : Wide ? " 宽磁贴" : " 方形磁贴"); }
+        public Project Copy()
+        {
+            var p = (Project)MemberwiseClone();
+            if (ColumnWidths != null) p.ColumnWidths = (int[])ColumnWidths.Clone();
+            p.Frames = Frames.Select(f => new FrameCrop { Name = f.Name, Zoom = f.Zoom, PanX = f.PanX, PanY = f.PanY }).ToList();
+            p.TileBindings = new Dictionary<Point, TileBinding>(TileBindings);
+            if (FreeLayout != null) p.FreeLayout = FreeLayout.Copy();
+            return p;
+        }
         public void Validate()
         {
             if (Columns < 1 || Columns > 6 || Rows < 1 || Rows > 8 || Gap < 0 || Gap > 24)
                 throw new InvalidDataException(UiText.Get("行列或间距超出支持范围。"));
             if(ColumnWidths!=null && (ColumnWidths.Length!=Columns || ColumnWidths.Any(w=>w!=150 && w!=310)))throw new InvalidDataException(UiText.Get("列宽无效。"));
-            Uri url;
-            if(Website.Length>0 && (!Uri.TryCreate(Website,UriKind.Absolute,out url) || (url.Scheme!="http" && url.Scheme!="https")))throw new InvalidDataException(UiText.Get("网址必须以 http:// 或 https:// 开头。"));
+            if (DefaultBinding != null) DefaultBinding.Validate(UiText.Get("网址必须以 http:// 或 https:// 开头。"));
+            if (FreeLayout == null)
+            {
+                foreach (var link in TileBindings)
+                {
+                    var tile = link.Key;
+                    if (tile.X < 0 || tile.X >= Columns || tile.Y < 0 || tile.Y >= Rows)
+                        throw new InvalidDataException(UiText.Get("磁贴绑定位置超出画布。"));
+                    link.Value.Validate(UiText.Format("第 {0} 行第 {1} 列的网址必须以 http:// 或 https:// 开头。", tile.Y + 1, tile.X + 1));
+                }
+            }
+            else
+            {
+                FreeLayout.Validate();
+                for (int i = 0; i < FreeLayout.Count; i++)
+                {
+                    var binding = FreeLayout[i].Binding;
+                    if (binding != null)
+                        binding.Validate(UiText.Format("第 {0} 块磁贴的网址必须以 http:// 或 https:// 开头。", i + 1));
+                }
+            }
             if(CycleMinutes<MinimumCycleMinutes || CycleMinutes>MaximumCycleMinutes || Frames.Count>20)
                 throw new InvalidDataException(UiText.Format("支持最多 20 张轮换图片，间隔为 {0} 至 {1} 分钟。", MinimumCycleMinutes, MaximumCycleMinutes));
             if(Frames.Any(f=>float.IsNaN(f.Zoom)||f.Zoom<1||f.Zoom>4||float.IsNaN(f.PanX)||float.IsNaN(f.PanY)||f.PanX<0||f.PanX>1||f.PanY<0||f.PanY>1))throw new InvalidDataException(UiText.Get("图片裁剪参数无效。"));
@@ -60,9 +165,18 @@ namespace TileMosaic
         {
             new XDocument(new XElement("TileMosaicProject", new XAttribute("format", 1),
                 new XElement("Id", Id), new XElement("Name", Name), new XElement("Columns", Columns),
-                new XElement("Rows", Rows), new XElement("Wide", Wide), new XElement("Gap", Gap),
+                new XElement("Rows", Rows), new XElement("Wide", Wide), new XElement("LargeTiles", LargeTiles), new XElement("Gap", Gap),
                 new XElement("ColumnWidths",ColumnWidths==null?"":string.Join(",",ColumnWidths)),
-                new XElement("Website",Website),new XElement("CycleMinutes",CycleMinutes),new XElement("Frames",Frames.Select(f=>f.Xml())),
+                DefaultBinding == null ? null : DefaultBinding.Xml("DefaultBinding"),
+                new XElement("CycleMinutes",CycleMinutes),new XElement("Frames",Frames.Select(f=>f.Xml())),
+                new XElement("TileBindings", TileBindings.OrderBy(link => link.Key.Y).ThenBy(link => link.Key.X).Select(link =>
+                {
+                    var element = link.Value.Xml("Tile");
+                    element.SetAttributeValue("Row", link.Key.Y);
+                    element.SetAttributeValue("Column", link.Key.X);
+                    return element;
+                })),
+                FreeLayout == null ? null : FreeLayout.Xml(),
                 new XElement("ShowNames", ShowNames), new XElement("Zoom", Zoom),
                 new XElement("PanX", PanX), new XElement("PanY", PanY), new XElement("Revision", Revision))).Save(path);
         }
@@ -72,12 +186,23 @@ namespace TileMosaic
             if (x == null || x.Name != "TileMosaicProject") throw new InvalidDataException(UiText.Get("不是磁贴工坊作品。"));
             var p = new Project { Id = (string)x.Element("Id"), Name = (string)x.Element("Name"),
                 Columns = (int)x.Element("Columns"), Rows = (int)x.Element("Rows"), Wide = (bool)x.Element("Wide"),
-                Gap = (int)x.Element("Gap"), ShowNames = (bool)x.Element("ShowNames"), Zoom = (float)x.Element("Zoom"),
+                Gap = (int)x.Element("Gap"), LargeTiles = (bool?)x.Element("LargeTiles") ?? false,
+                ShowNames = (bool)x.Element("ShowNames"), Zoom = (float)x.Element("Zoom"),
                 PanX = (float)x.Element("PanX"), PanY = (float)x.Element("PanY"), Revision = (int)x.Element("Revision"),
                 DirectoryPath = Path.GetDirectoryName(Path.GetFullPath(path)) };
             string widths=(string)x.Element("ColumnWidths");
             if(!string.IsNullOrWhiteSpace(widths))p.ColumnWidths=widths.Split(',').Select(int.Parse).ToArray();
-            p.Website=(string)x.Element("Website")??"";p.CycleMinutes=(int?)x.Element("CycleMinutes")??15;
+            p.DefaultBinding = TileBinding.Load(x.Element("DefaultBinding") ?? x.Element("Website"));
+            p.CycleMinutes = (int?)x.Element("CycleMinutes") ?? 15;
+            var tileBindings = x.Element("TileBindings") ?? x.Element("TileWebsites");
+            if (tileBindings != null)
+                foreach (var tile in tileBindings.Elements("Tile"))
+                {
+                    var binding = TileBinding.Load(tile);
+                    if (binding != null)
+                        p.TileBindings.Add(new Point((int)tile.Attribute("Column"), (int)tile.Attribute("Row")), binding);
+                }
+            if (x.Element("FreeLayout") != null) p.FreeLayout = FreeTileLayout.Load(x.Element("FreeLayout"));
             if(x.Element("Frames")!=null)p.Frames=x.Element("Frames").Elements("Frame").Select(f=>new FrameCrop{Name=(string)f.Attribute("Name"),Zoom=(float)f.Attribute("Zoom"),PanX=(float)f.Attribute("PanX"),PanY=(float)f.Attribute("PanY")}).ToList();
             p.Validate(); return p;
         }
@@ -119,10 +244,15 @@ namespace TileMosaic
         }
         public static RectangleF TileCrop(Size image, Project p, int row, int column)
         {
+            return TileCrop(image, p, new Point(column, row));
+        }
+        public static RectangleF TileCrop(Size image, Project p, Point tile)
+        {
             RectangleF total = Crop(image, p);
-            return new RectangleF(total.X + p.LeftAt(column) * total.Width / p.Width,
-                total.Y + (row * (p.TileHeight + p.Gap)) * total.Height / p.Height,
-                p.WidthAt(column) * total.Width / p.Width, p.TileHeight * total.Height / p.Height);
+            Rectangle bounds = p.BoundsAt(tile);
+            return new RectangleF(total.X + bounds.X * total.Width / p.Width,
+                total.Y + bounds.Y * total.Height / p.Height,
+                bounds.Width * total.Width / p.Width, bounds.Height * total.Height / p.Height);
         }
         public static Bitmap Render(Image image, RectangleF source, int w, int h, bool cover)
         {
@@ -151,7 +281,6 @@ namespace TileMosaic
         static readonly XNamespace ns = "http://schemas.microsoft.com/appx/manifest/foundation/windows10";
         static readonly XNamespace uap = "http://schemas.microsoft.com/appx/manifest/uap/windows10";
 
-        static readonly XNamespace uap10 = "http://schemas.microsoft.com/appx/manifest/uap/windows10/10";
         static readonly XNamespace rescap = "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities";
 
         public static string PrepareRegistration(Project project)
@@ -210,24 +339,20 @@ namespace TileMosaic
                 }
                 extensions.Elements().Where(extension => (string)extension.Attribute("Category") == "windows.backgroundTasks" ||
                     (string)extension.Attribute("Category") == "windows.appService").Remove();
-                // JS rotation still runs under the original owner, in a separate background host.
+                // The StartPage selects the JavaScript host. Explicit extension runtime
+                // attributes on a full-trust app make Windows 10 reject the manifest.
                 extensions.Add(
                     new XElement(ns + "Extension", new XAttribute("Category", "windows.backgroundTasks"),
                         new XAttribute("StartPage", "background.js"),
-                        new XAttribute(uap10 + "RuntimeBehavior", "windowsApp"),
-                        new XAttribute(uap10 + "TrustLevel", "appContainer"),
                         new XElement(ns + "BackgroundTasks", new XElement(ns + "Task", new XAttribute("Type", "timer")))),
                     new XElement(uap + "Extension", new XAttribute("Category", "windows.appService"),
                         new XAttribute("StartPage", "rotation-service.js"),
-                        new XAttribute(uap10 + "RuntimeBehavior", "windowsApp"),
-                        new XAttribute(uap10 + "TrustLevel", "appContainer"),
                         new XElement(uap + "AppService", new XAttribute("Name", TileRuntime.RotationServiceName))));
                 TileRuntime.WriteBackgroundFiles(directory, project);
             }
 
-            package.SetAttributeValue(XNamespace.Xmlns + "uap10", uap10);
             package.SetAttributeValue(XNamespace.Xmlns + "rescap", rescap);
-            package.SetAttributeValue("IgnorableNamespaces", "uap uap10 rescap");
+            package.SetAttributeValue("IgnorableNamespaces", "uap rescap");
             var capabilities = package.Element(ns + "Capabilities");
             if (capabilities == null)
             {
@@ -237,6 +362,30 @@ namespace TileMosaic
             if (!capabilities.Elements(rescap + "Capability").Any(cap => (string)cap.Attribute("Name") == "runFullTrust"))
                 capabilities.Add(new XElement(rescap + "Capability", new XAttribute("Name", "runFullTrust")));
             TileActivation.Write(directory, project);
+        }
+
+        static void PublishProjectDirectory(string stage, string final)
+        {
+            const int maxRetries = 4;
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Move(stage, final);
+                    return;
+                }
+                catch (IOException ex)
+                {
+                    int error = ex.HResult & 0xffff;
+                    if (attempt == maxRetries || (error != 5 && error != 32 && error != 33)) throw;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    if (attempt == maxRetries) throw;
+                }
+                // A newly written file may briefly be held open without delete sharing.
+                System.Threading.Thread.Sleep(75 << attempt);
+            }
         }
 
         // Build into a new staging directory. Existing installed assets are untouched until an explicit update.
@@ -265,19 +414,22 @@ namespace TileMosaic
                 RectangleF total = Images.Crop(source.Size, p);
                 Images.Save(source, total, 50, 50, Path.Combine(assets, "Store.png"), true);
                 var applications = new XElement(ns + "Applications");
-                for (int row = 0; row < p.Rows; row++) for (int col = 0; col < p.Columns; col++)
+                for (int i = 0; i < p.TileCount; i++)
                 {
-                    string id = "Tile" + (row * p.Columns + col + 1).ToString("D3");
-                    RectangleF crop = Images.TileCrop(source.Size, p, row, col);
+                    var key = p.TileKeyAt(i);
+                    var shape = p.ShapeAt(key);
+                    string id = "Tile" + (i + 1).ToString("D3");
+                    RectangleF crop = Images.TileCrop(source.Size, p, key);
                     foreach (int size in new[] { 44, 71, 150, 310 })
                         Images.Save(source, crop, size, size, Path.Combine(assets, id + "-" + size + ".png"), true);
-                    if (p.IsWide(col)) Images.Save(source, crop, 310, 150, Path.Combine(assets, id + "-Wide.png"), false);
+                    bool wideLogo = shape != TileShape.Medium;
+                    if (wideLogo) Images.Save(source, crop, 310, 150, Path.Combine(assets, id + "-Wide.png"), shape == TileShape.Large);
                     var tile = new XElement(uap + "DefaultTile", new XAttribute("ShortName", Project.TileDisplayName), new XAttribute("Square71x71Logo", "Assets\\" + id + "-71.png"));
-                    if (p.IsWide(col)) tile.Add(new XAttribute("Wide310x150Logo", "Assets\\" + id + "-Wide.png"),new XAttribute("Square310x310Logo", "Assets\\" + id + "-310.png"));
+                    if (wideLogo) tile.Add(new XAttribute("Wide310x150Logo", "Assets\\" + id + "-Wide.png"),new XAttribute("Square310x310Logo", "Assets\\" + id + "-310.png"));
                     if(p.ShowNames)
                     {
                         var show=new XElement(uap+"ShowNameOnTiles",new XElement(uap+"ShowOn",new XAttribute("Tile","square150x150Logo")));
-                        if(p.IsWide(col))show.Add(new XElement(uap+"ShowOn",new XAttribute("Tile","wide310x150Logo")),new XElement(uap+"ShowOn",new XAttribute("Tile","square310x310Logo")));
+                        if(wideLogo)show.Add(new XElement(uap+"ShowOn",new XAttribute("Tile","wide310x150Logo")),new XElement(uap+"ShowOn",new XAttribute("Tile","square310x310Logo")));
                         tile.Add(show);
                     }
                     applications.Add(new XElement(ns + "Application", new XAttribute("Id", id),
@@ -288,12 +440,14 @@ namespace TileMosaic
                 for(int frame=0;frame<sources.Count;frame++)
                 {
                     Project fp=p.Copy();fp.Zoom=p.Frames[frame].Zoom;fp.PanX=p.Frames[frame].PanX;fp.PanY=p.Frames[frame].PanY;
-                    for(int row=0;row<p.Rows;row++)for(int col=0;col<p.Columns;col++)
+                    for (int i = 0; i < p.TileCount; i++)
                     {
-                        string id="F"+frame.ToString("D3")+"-Tile"+(row*p.Columns+col+1).ToString("D3");
-                        var crop=Images.TileCrop(sources[frame].Size,fp,row,col);
+                        var key = p.TileKeyAt(i);
+                        var shape = p.ShapeAt(key);
+                        string id="F"+frame.ToString("D3")+"-Tile"+(i+1).ToString("D3");
+                        var crop=Images.TileCrop(sources[frame].Size,fp,key);
                         foreach(int size in new[]{150,310})Images.Save(sources[frame],crop,size,size,Path.Combine(assets,id+"-"+size+".png"),true);
-                        if(p.IsWide(col))Images.Save(sources[frame],crop,310,150,Path.Combine(assets,id+"-Wide.png"),false);
+                        if (shape != TileShape.Medium) Images.Save(sources[frame], crop, 310, 150, Path.Combine(assets, id+"-Wide.png"), shape == TileShape.Large);
                     }
                 }
                 var manifest = new XDocument(new XDeclaration("1.0", "utf-8", null), new XElement(ns + "Package", new XAttribute(XNamespace.Xmlns + "uap", uap),
@@ -307,12 +461,15 @@ namespace TileMosaic
                 p.Save(Path.Combine(stage, "project.xml"));
                 File.WriteAllText(Path.Combine(stage, "使用说明.txt"),
                     "这些文件由 TileGenie 生成。Package 文件夹供 Windows 显示磁贴，请保留其位置。\r\n如需取消固定，请在开始菜单中右键点击对应磁贴。", System.Text.Encoding.UTF8);
-                Directory.Move(stage, final); return p;
+                PublishProjectDirectory(stage, final);
+                return p;
             }
             catch
             {
                 // Only the unique directory created by this invocation is eligible for rollback.
-                if (Directory.Exists(stage)) Directory.Delete(stage, true);
+                try { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
                 throw;
             }
         }

@@ -9,7 +9,7 @@ namespace TileMosaic
         [STAThread]
         static int Main(string[] args)
         {
-            if (TileActivation.IsTileLauncher) return TileActivation.Open();
+            if (TileActivation.IsTileLauncher) return TileActivation.Open(args);
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"TileMosaic","Projects");
             string initial=null;
